@@ -1,0 +1,185 @@
+{
+  "name": "Smiles Agent — Monitor de Milhas",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 8 * * *" }
+          ]
+        }
+      },
+      "id": "cron-0800",
+      "name": "⏰ Cron 08:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 200]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 18 * * *" }
+          ]
+        }
+      },
+      "id": "cron-1800",
+      "name": "⏰ Cron 18:00",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 340]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "cronExpression", "expression": "0 0,3,6 * * *" }
+          ]
+        }
+      },
+      "id": "cron-noturno",
+      "name": "🌙 Cron Noturno (00h/03h/06h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [240, 480]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "smiles-search",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-manual",
+      "name": "🔗 Webhook Busca Manual",
+      "type": "n8n-nodes-base.webhook",
+      "position": [240, 620]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SMILES_AGENT_URL }}/run-all",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SMILES_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "sendWhatsApp",
+              "value": "true"
+            },
+            {
+              "name": "onlyGoodDeals",
+              "value": "true"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "run-all-agendado",
+      "name": "🚀 Rodar Todos os Destinos",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [560, 340]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SMILES_AGENT_URL }}/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SMILES_WEBHOOK_SECRET }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"origin\": \"{{ $json.body.origin }}\",\n  \"destination\": \"{{ $json.body.destination }}\",\n  \"date\": \"{{ $json.body.date || 'flexible' }}\",\n  \"sendWhatsApp\": true\n}",
+        "options": {
+          "timeout": 120000
+        }
+      },
+      "id": "busca-manual",
+      "name": "🔍 Busca Manual",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [560, 620]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "resposta-webhook",
+      "name": "📤 Resposta Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [880, 620]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Log do resultado do ciclo de monitoramento\nconst data = $input.first().json;\n\nconsole.log(`[n8n] Ciclo completo: ${data.totalDestinations} destinos, ${data.alertsSent} alertas enviados`);\n\nif (data.results) {\n  data.results.forEach(r => {\n    if (r.error) {\n      console.error(`[n8n] Erro em ${r.dest}: ${r.error}`);\n    } else if (r.alerted) {\n      console.log(`[n8n] ✅ Alerta enviado para ${r.dest}: ${r.bestOffer?.miles} milhas`);\n    } else {\n      console.log(`[n8n] ℹ️  ${r.dest}: ${r.bestOffer?.miles || 'N/A'} milhas — sem alerta`);\n    }\n  });\n}\n\nreturn $input.all();"
+      },
+      "id": "log-resultado",
+      "name": "📊 Log Resultado",
+      "type": "n8n-nodes-base.code",
+      "position": [880, 340]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.SMILES_AGENT_URL }}/status",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.SMILES_WEBHOOK_SECRET }}"
+            }
+          ]
+        }
+      },
+      "id": "get-status",
+      "name": "📈 Get Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [1100, 340]
+    }
+  ],
+  "connections": {
+    "⏰ Cron 08:00": {
+      "main": [[{ "node": "🚀 Rodar Todos os Destinos", "type": "main", "index": 0 }]]
+    },
+    "⏰ Cron 18:00": {
+      "main": [[{ "node": "🚀 Rodar Todos os Destinos", "type": "main", "index": 0 }]]
+    },
+    "🌙 Cron Noturno (00h/03h/06h)": {
+      "main": [[{ "node": "🚀 Rodar Todos os Destinos", "type": "main", "index": 0 }]]
+    },
+    "🔗 Webhook Busca Manual": {
+      "main": [[{ "node": "🔍 Busca Manual", "type": "main", "index": 0 }]]
+    },
+    "🚀 Rodar Todos os Destinos": {
+      "main": [[{ "node": "📊 Log Resultado", "type": "main", "index": 0 }]]
+    },
+    "🔍 Busca Manual": {
+      "main": [[{ "node": "📤 Resposta Webhook", "type": "main", "index": 0 }]]
+    },
+    "📊 Log Resultado": {
+      "main": [[{ "node": "📈 Get Status", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
