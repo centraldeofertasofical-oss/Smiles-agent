@@ -1,0 +1,121 @@
+/**
+ * destinations.js
+ * ─────────────────────────────────────────────────────────────
+ * Gerencia os 4 destinos monitorados.
+ * Mantém histórico de milhas no Redis para cálculo de média.
+ * Detecta quando um preço está abaixo da média histórica.
+ * ─────────────────────────────────────────────────────────────
+ */
+
+require('dotenv').config();
+const redis = require('./redis-client');
+
+// ── Carrega destinos do .env ──────────────────────────────────
+function getDestinations() {
+  const raw = process.env.DESTINATIONS || 'GRU-MIA,GRU-LIS,GRU-MCO,CGH-SSA';
+  const maxMiles = (process.env.MAX_MILES || '0,0,0,0').split(',').map(Number);
+  const dates = (process.env.DEPARTURE_DATES || 'flexible,flexible,flexible,flexible').split(',');
+
+  return raw.split(',').map((pair, i) => {
+    const [origin, destination] = pair.trim().split('-');
+    return {
+      id: pair.trim(),
+      origin,
+      destination,
+      date: (dates[i] || 'flexible').trim(),
+      maxMiles: maxMiles[i] || 0,
+      label: `${origin} → ${destination}`,
+    };
+  });
+}
+
+// ── Histórico de preços ───────────────────────────────────────
+
+const HISTORY_MAX_ENTRIES = 50; // mantém últimas 50 buscas por destino
+
+/**
+ * Salva os melhores preços encontrados para um destino.
+ * @param {string} destId  - ex: "GRU-MIA"
+ * @param {Array}  flights - lista de voos retornada pelo search.js
+ */
+async function saveHistory(destId, flights) {
+  if (!flights || flights.length === 0) return;
+
+  const key = `smiles:history:${destId}`;
+  const best = flights[0]; // voo mais barato (já ordenado por score)
+
+  const entry = {
+    ts: new Date().toISOString(),
+    miles: best.miles,
+    tax: best.tax,
+    date: best.date,
+    airline: best.airline,
+  };
+
+  // Adiciona no início da lista
+  await redis.lPush(key, JSON.stringify(entry));
+  // Mantém só os últimos N
+  await redis.lTrim(key, 0, HISTORY_MAX_ENTRIES - 1);
+  // TTL de 90 dias
+  await redis.expire(key, 60 * 60 * 24 * 90);
+}
+
+/**
+ * Retorna a média histórica de milhas para um destino.
+ * @param {string} destId
+ * @returns {{ avgMiles, minMiles, count, entries }}
+ */
+async function getHistory(destId) {
+  const key = `smiles:history:${destId}`;
+  const rawList = await redis.lRange(key, 0, -1);
+
+  if (!rawList || rawList.length === 0) {
+    return { avgMiles: null, minMiles: null, count: 0, entries: [] };
+  }
+
+  const entries = rawList.map(r => JSON.parse(r));
+  const milesList = entries.map(e => e.miles).filter(Boolean);
+
+  const avgMiles = milesList.reduce((a, b) => a + b, 0) / milesList.length;
+  const minMiles = Math.min(...milesList);
+
+  return { avgMiles: Math.round(avgMiles), minMiles, count: entries.length, entries };
+}
+
+/**
+ * Verifica se o voo atual é uma boa oferta comparado ao histórico.
+ * @param {string} destId
+ * @param {Object} flight - voo a verificar
+ * @returns {{ isGoodDeal, percentBelow, avgMiles }}
+ */
+async function isGoodDeal(destId, flight) {
+  const threshold = parseFloat(process.env.ALERT_THRESHOLD || '0.15');
+  const { avgMiles, count } = await getHistory(destId);
+
+  // Sem histórico suficiente (menos de 5 entradas), considera qualquer voo válido
+  if (!avgMiles || count < 5) {
+    return { isGoodDeal: true, percentBelow: null, avgMiles: null, reason: 'histórico insuficiente' };
+  }
+
+  const percentBelow = (avgMiles - flight.miles) / avgMiles;
+  const isGood = percentBelow >= threshold;
+
+  return {
+    isGoodDeal: isGood,
+    percentBelow: Math.round(percentBelow * 100),
+    avgMiles,
+    reason: isGood
+      ? `${Math.round(percentBelow * 100)}% abaixo da média histórica`
+      : `apenas ${Math.round(percentBelow * 100)}% abaixo da média (mínimo: ${Math.round(threshold * 100)}%)`,
+  };
+}
+
+/**
+ * Verifica se o número de milhas está dentro do limite configurado.
+ */
+function isWithinMaxMiles(destination, miles) {
+  if (!destination.maxMiles || destination.maxMiles === 0) return true;
+  return miles <= destination.maxMiles;
+}
+
+module.exports = { getDestinations, saveHistory, getHistory, isGoodDeal, isWithinMaxMiles };
