@@ -1,37 +1,58 @@
 /**
- * redis-client.js
- * Cliente Redis singleton compartilhado por todos os módulos.
- */
 
-require('dotenv').config();
-const { createClient } = require('redis');
+- redis-client.js
+- Substituído por armazenamento em memória simples.
+- Não precisa de Redis — os dados ficam na RAM do servidor Railway.
+  */
 
-const client = createClient({ url: process.env.REDIS_URL });
+const store = {};
 
-client.on('error', (err) => console.error('[redis] Erro:', err.message));
-client.on('connect', () => console.log('[redis] ✅ Conectado'));
+const redis = {
+async get(key) {
+const entry = store[key];
+if (!entry) return null;
+if (entry.expiresAt && Date.now() > entry.expiresAt) {
+delete store[key];
+return null;
+}
+return entry.value;
+},
 
-// Conecta automaticamente na primeira importação
-let connected = false;
-const connectPromise = (async () => {
-  if (!connected) {
-    await client.connect();
-    connected = true;
-  }
-})();
+async set(key, value, options = {}) {
+const expiresAt = options.EX ? Date.now() + options.EX * 1000 : null;
+store[key] = { value, expiresAt };
+return ‘OK’;
+},
 
-// Wrapper que garante conexão antes de qualquer operação
-const redis = new Proxy(client, {
-  get(target, prop) {
-    const original = target[prop];
-    if (typeof original === 'function') {
-      return async (...args) => {
-        await connectPromise;
-        return original.apply(target, args);
-      };
-    }
-    return original;
-  }
-});
+async del(…keys) {
+keys.forEach(k => delete store[k]);
+return keys.length;
+},
+
+async lPush(key, value) {
+if (!store[key]) store[key] = { value: [], expiresAt: null };
+store[key].value.unshift(value);
+return store[key].value.length;
+},
+
+async lTrim(key, start, end) {
+if (!store[key]) return;
+store[key].value = store[key].value.slice(start, end + 1);
+},
+
+async lRange(key, start, end) {
+const entry = store[key];
+if (!entry) return [];
+const arr = entry.value;
+return end === -1 ? arr.slice(start) : arr.slice(start, end + 1);
+},
+
+async expire(key, seconds) {
+if (!store[key]) return;
+store[key].expiresAt = Date.now() + seconds * 1000;
+},
+
+on() {}, // compatibilidade — não faz nada
+};
 
 module.exports = redis;
