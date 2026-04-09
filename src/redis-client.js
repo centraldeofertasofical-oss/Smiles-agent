@@ -1,58 +1,51 @@
-/**
+var store = {};
 
-- redis-client.js
-- Substituído por armazenamento em memória simples.
-- Não precisa de Redis — os dados ficam na RAM do servidor Railway.
-  */
-
-const store = {};
-
-const redis = {
-async get(key) {
-const entry = store[key];
+function getEntry(key) {
+var entry = store[key];
 if (!entry) return null;
-if (entry.expiresAt && Date.now() > entry.expiresAt) {
+if (entry.exp && Date.now() > entry.exp) {
 delete store[key];
 return null;
 }
-return entry.value;
-},
+return entry;
+}
 
-async set(key, value, options = {}) {
-const expiresAt = options.EX ? Date.now() + options.EX * 1000 : null;
-store[key] = { value, expiresAt };
+var redis = {
+get: async function(key) {
+var e = getEntry(key);
+return e ? e.val : null;
+},
+set: async function(key, value, opts) {
+var exp = null;
+if (opts && opts.EX) exp = Date.now() + opts.EX * 1000;
+store[key] = { val: value, exp: exp };
 return ‘OK’;
 },
-
-async del(…keys) {
-keys.forEach(k => delete store[k]);
-return keys.length;
+del: async function(key) {
+delete store[key];
+return 1;
 },
-
-async lPush(key, value) {
-if (!store[key]) store[key] = { value: [], expiresAt: null };
-store[key].value.unshift(value);
-return store[key].value.length;
+lPush: async function(key, value) {
+if (!store[key]) store[key] = { val: [], exp: null };
+store[key].val.unshift(value);
+return store[key].val.length;
 },
-
-async lTrim(key, start, end) {
+lTrim: async function(key, start, end) {
 if (!store[key]) return;
-store[key].value = store[key].value.slice(start, end + 1);
+store[key].val = store[key].val.slice(start, end + 1);
 },
-
-async lRange(key, start, end) {
-const entry = store[key];
-if (!entry) return [];
-const arr = entry.value;
-return end === -1 ? arr.slice(start) : arr.slice(start, end + 1);
+lRange: async function(key, start, end) {
+var e = getEntry(key);
+if (!e) return [];
+var arr = e.val;
+if (end === -1) return arr.slice(start);
+return arr.slice(start, end + 1);
 },
-
-async expire(key, seconds) {
+expire: async function(key, seconds) {
 if (!store[key]) return;
-store[key].expiresAt = Date.now() + seconds * 1000;
+store[key].exp = Date.now() + seconds * 1000;
 },
-
-on() {}, // compatibilidade — não faz nada
+on: function() {}
 };
 
 module.exports = redis;
