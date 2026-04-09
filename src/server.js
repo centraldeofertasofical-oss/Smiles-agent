@@ -16,12 +16,14 @@ app.get("/search-all", async function(req, res) {
   var td = req.query.date || nextDate(30);
   for (var i = 0; i < d.length; i++) {
     try {
+      console.log("[search] " + d[i].label + " em " + td);
       var raw = await srch.searchFlights({ from: d[i].from, to: d[i].to, date: td });
       var fl = norm.normalizeFlights(raw, Object.assign({}, d[i], { date: td }));
       var cal = norm.extractCalendar(raw);
       results.push({ route: d[i].id, label: d[i].label, date: td, total: fl.length, bestOffer: fl[0] || null, top3: fl.slice(0, 3), bestPricing: cal.bestPricing, calendar: cal.calendar.slice(0, 7) });
       await sleep(1500);
     } catch(err) {
+      console.error("[error] " + d[i].id + ": " + err.message);
       errors.push({ route: d[i].id, error: err.message });
     }
   }
@@ -46,7 +48,13 @@ app.get("/status", function(req, res) {
   res.json({ status: "ok", destinations: dests.getDestinations(), updatedAt: new Date().toISOString() });
 });
 
-function nextDate(n) { var d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().split("T")[0].replace(/-/g, ""); }
+// Gera data no formato YYYY-MM-DD
+function nextDate(n) {
+  var d = new Date();
+  d.setDate(d.getDate() + n);
+  return d.toISOString().split("T")[0];
+}
+
 function sleep(ms) { return new Promise(function(r) { setTimeout(r, ms); }); }
 
 app.listen(PORT, function() {
