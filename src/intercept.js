@@ -1,16 +1,3 @@
-/**
- * intercept.js
- * ─────────────────────────────────────────────────────────────
- * Roda UMA VEZ localmente para mapear os endpoints reais da API
- * interna da Smiles. Salva tudo em intercept-report.json.
- *
- * Como usar:
- *   node src/intercept.js
- *
- * Precisa ter SMILES_EMAIL e SMILES_PASSWORD no .env
- * ─────────────────────────────────────────────────────────────
- */
-
 require('dotenv').config();
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -19,24 +6,20 @@ const TARGET_ORIGIN = 'GRU';
 const TARGET_DEST   = 'MIA';
 const TARGET_DATE   = (() => {
   const d = new Date();
-  d.setDate(d.getDate() + 45); // busca 45 dias à frente
+  d.setDate(d.getDate() + 45);
   return d.toISOString().split('T')[0];
 })();
 
-const capturedRequests = [];
+const capturedRequests  = [];
 const capturedResponses = [];
 
 async function intercept() {
-  console.log('🔍 Iniciando interceptação da API Smiles...');
-  console.log(`   Destino de teste: ${TARGET_ORIGIN} → ${TARGET_DEST} em ${TARGET_DATE}\n`);
+  console.log('Iniciando interceptacao...');
+  console.log('Destino: ' + TARGET_ORIGIN + ' > ' + TARGET_DEST + ' em ' + TARGET_DATE);
 
   const browser = await chromium.launch({
-    headless: false, // deixa visível para você acompanhar e fazer login manual se precisar
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-    ]
+    headless: false,
+    args: ['--no-sandbox', '--disable-blink-features=AutomationControlled']
   });
 
   const context = await browser.newContext({
@@ -48,124 +31,143 @@ async function intercept() {
 
   const page = await context.newPage();
 
-  // ── Intercepta TODOS os requests XHR/fetch ──────────────────
+  // Captura requests relevantes
   page.on('request', (req) => {
     const url = req.url();
-    const method = req.method();
-    const headers = req.headers();
-    const postData = req.postData();
-
-    // Filtra só APIs relevantes (ignora CDN, analytics, etc.)
     if (
       url.includes('api.smiles') ||
-      url.includes('smiles.com.br/api') ||
-      url.includes('/v1/') ||
-      url.includes('/v2/') ||
-      url.includes('/flights') ||
-      url.includes('/miles') ||
-      url.includes('/search') ||
+      url.includes('/v1/airlines') ||
+      url.includes('/v2/airlines') ||
       url.includes('cognito') ||
-      url.includes('amazonaws.com')
+      url.includes('amazonaws.com/oauth2') ||
+      url.includes('smiles.com.br/api')
     ) {
-      const entry = { url, method, headers, postData: postData || null };
-      capturedRequests.push(entry);
-      console.log(`📤 ${method} ${url}`);
+      capturedRequests.push({
+        url,
+        method: req.method(),
+        headers: req.headers(),
+        postData: req.postData() || null
+      });
+      console.log('>> ' + req.method() + ' ' + url);
     }
   });
 
-  // ── Intercepta as respostas ──────────────────────────────────
+  // Captura respostas relevantes
   page.on('response', async (res) => {
     const url = res.url();
     if (
       url.includes('api.smiles') ||
-      url.includes('smiles.com.br/api') ||
-      url.includes('/v1/') ||
-      url.includes('/v2/') ||
-      url.includes('/flights') ||
-      url.includes('/miles') ||
-      url.includes('/search')
+      url.includes('/v1/airlines') ||
+      url.includes('/v2/airlines') ||
+      url.includes('cognito') ||
+      url.includes('amazonaws.com/oauth2')
     ) {
       try {
         const body = await res.text();
-        const status = res.status();
-        capturedResponses.push({ url, status, body: body.substring(0, 2000) }); // primeiros 2000 chars
-        console.log(`📥 ${status} ${url}`);
+        capturedResponses.push({ url, status: res.status(), body: body.substring(0, 3000) });
+        console.log('<< ' + res.status() + ' ' + url);
       } catch (_) {}
     }
   });
 
-  // ── Abre a Smiles ────────────────────────────────────────────
-  await page.goto('https://www.smiles.com.br', { waitUntil: 'networkidle', timeout: 30000 });
-  await page.waitForTimeout(2000);
-
-  // ── Tenta login automático ───────────────────────────────────
-  console.log('\n🔐 Tentando login automático...');
+  // Abre o site
+  console.log('\nAbrindo smiles.com.br...');
   try {
-    // Clica no botão de login
-    const loginBtn = page.locator('button[class*="login"], a[href*="login"], [data-testid*="login"]').first();
-    if (await loginBtn.isVisible({ timeout: 5000 })) {
-      await loginBtn.click();
-      await page.waitForTimeout(1500);
-    }
-
-    // Preenche email
-    const emailInput = page.locator('input[type="email"], input[name="email"], input[placeholder*="e-mail" i], input[placeholder*="email" i]').first();
-    await emailInput.fill(process.env.SMILES_EMAIL, { timeout: 8000 });
-    await page.waitForTimeout(800);
-
-    // Preenche senha
-    const passInput = page.locator('input[type="password"]').first();
-    await passInput.fill(process.env.SMILES_PASSWORD);
-    await page.waitForTimeout(800);
-
-    // Submete
-    const submitBtn = page.locator('button[type="submit"]').first();
-    await submitBtn.click();
-    await page.waitForTimeout(3000);
-
-    console.log('✅ Login submetido. Aguardando redirecionamento...');
+    await page.goto('https://www.smiles.com.br', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000
+    });
   } catch (e) {
-    console.log('⚠️  Login automático falhou. Faça o login manualmente na janela aberta.');
-    console.log('   Após logar, a busca será feita automaticamente.\n');
+    console.log('Site demorou mas continuando...');
   }
 
-  // ── Aguarda estar logado (até 60s para login manual se necessário) ──
-  await page.waitForTimeout(5000);
-
-  // ── Navega para busca de voos por milhas ────────────────────
-  console.log(`\n✈️  Buscando voos: ${TARGET_ORIGIN} → ${TARGET_DEST} em ${TARGET_DATE}...`);
-  const searchUrl = `https://www.smiles.com.br/emission?originAirportCode=${TARGET_ORIGIN}&destinationAirportCode=${TARGET_DEST}&departureDate=${TARGET_DATE}&adults=${1}&children=0&infants=0&isFlexibleDateChecked=false&tripType=1&cabinType=all&currencyCode=BRL`;
-
-  await page.goto(searchUrl, { waitUntil: 'networkidle', timeout: 45000 });
-  await page.waitForTimeout(8000); // aguarda lazy loading dos resultados
-
-  // Scroll para garantir carregamento
-  await page.evaluate(() => window.scrollBy(0, 600));
   await page.waitForTimeout(3000);
 
-  // ── Captura cookies e localStorage (tokens) ─────────────────
-  const cookies = await context.cookies();
-  const localStorage = await page.evaluate(() => {
+  // Tenta clicar em login
+  console.log('Tentando clicar em Acessar conta...');
+  try {
+    const btn = page.locator('text=Acessar conta').first();
+    if (await btn.isVisible({ timeout: 5000 })) {
+      await btn.click();
+      await page.waitForTimeout(2000);
+    }
+  } catch (_) {
+    // tenta navegar direto para login
+    try {
+      await page.goto('https://login.smiles.com.br', {
+        waitUntil: 'domcontentloaded',
+        timeout: 30000
+      });
+    } catch (_) {}
+  }
+
+  await page.waitForTimeout(2000);
+
+  // Tenta preencher login automaticamente
+  console.log('Preenchendo login...');
+  try {
+    const cpfInput = page.locator('input').first();
+    await cpfInput.fill(process.env.SMILES_EMAIL, { timeout: 5000 });
+    await page.waitForTimeout(800);
+
+    const continueBtn = page.locator('button:has-text("Continuar")').first();
+    if (await continueBtn.isVisible({ timeout: 3000 })) {
+      await continueBtn.click();
+      await page.waitForTimeout(2000);
+    }
+
+    const passInput = page.locator('input[type="password"]').first();
+    await passInput.fill(process.env.SMILES_PASSWORD, { timeout: 5000 });
+    await page.waitForTimeout(500);
+
+    const submitBtn = page.locator('button:has-text("Continuar")').first();
+    await submitBtn.click();
+    console.log('Login submetido!');
+  } catch (e) {
+    console.log('Login auto falhou: ' + e.message);
+  }
+
+  // Aguarda MFA (codigo SMS) - voce tem 90 segundos para digitar
+  console.log('\n========================================');
+  console.log('SE PEDIU CODIGO SMS: digite na janela!');
+  console.log('Aguardando 90 segundos...');
+  console.log('========================================\n');
+  await page.waitForTimeout(90000);
+
+  // Navega para busca de voos
+  const searchUrl = 'https://www.smiles.com.br/emission?originAirportCode=' + TARGET_ORIGIN +
+    '&destinationAirportCode=' + TARGET_DEST +
+    '&departureDate=' + TARGET_DATE.replace(/-/g, '') +
+    '&adults=1&children=0&infants=0&tripType=1&cabinType=all&currencyCode=BRL';
+
+  console.log('Navegando para busca de voos...');
+  try {
+    await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  } catch (e) {
+    console.log('Timeout na busca, continuando...');
+  }
+
+  await page.waitForTimeout(12000);
+  await page.evaluate(() => window.scrollBy(0, 600));
+  await page.waitForTimeout(5000);
+
+  // Captura tokens do localStorage
+  const tokens = await page.evaluate(() => {
     const data = {};
-    for (let i = 0; i < window.localStorage.length; i++) {
-      const key = window.localStorage.key(i);
-      data[key] = window.localStorage.getItem(key);
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      const val = localStorage.getItem(key);
+      if (key && (key.includes('Cognito') || key.includes('token') || key.includes('Token'))) {
+        data[key] = val;
+      }
     }
     return data;
   });
 
-  // Filtra tokens JWT do localStorage
-  const tokens = {};
-  for (const [key, value] of Object.entries(localStorage)) {
-    if (key.includes('CognitoIdentityServiceProvider') || key.includes('token') || key.includes('Token')) {
-      tokens[key] = value;
-    }
-  }
+  const cookies = await context.cookies();
 
-  // ── Salva relatório completo ─────────────────────────────────
   const report = {
     capturedAt: new Date().toISOString(),
-    searchTested: { origin: TARGET_ORIGIN, destination: TARGET_DEST, date: TARGET_DATE },
     tokens,
     relevantCookies: cookies.filter(c => c.domain.includes('smiles')),
     requests: capturedRequests,
@@ -173,28 +175,27 @@ async function intercept() {
   };
 
   fs.writeFileSync('intercept-report.json', JSON.stringify(report, null, 2));
-  console.log('\n✅ Relatório salvo em: intercept-report.json');
-  console.log(`   ${capturedRequests.length} requests capturados`);
-  console.log(`   ${capturedResponses.length} responses capturadas`);
-  console.log(`   ${Object.keys(tokens).length} tokens encontrados no localStorage\n`);
 
-  // Identifica o endpoint de busca de voos
-  const flightEndpoints = capturedRequests.filter(r =>
-    r.url.includes('flight') || r.url.includes('miles') || r.url.includes('search') || r.url.includes('emission')
+  console.log('\n=== RESULTADO ===');
+  console.log('Requests capturados: ' + capturedRequests.length);
+  console.log('Tokens encontrados: ' + Object.keys(tokens).length);
+
+  const flightReqs = capturedRequests.filter(r =>
+    r.url.includes('airline') || r.url.includes('flight') || r.url.includes('miles') || r.url.includes('search')
   );
 
-  if (flightEndpoints.length > 0) {
-    console.log('🎯 ENDPOINTS DE VOO IDENTIFICADOS:');
-    flightEndpoints.forEach(r => {
-      console.log(`   ${r.method} ${r.url}`);
-    });
+  if (flightReqs.length > 0) {
+    console.log('\nENDPOINTS DE VOO ENCONTRADOS:');
+    flightReqs.forEach(r => console.log('  ' + r.method + ' ' + r.url));
+  } else {
+    console.log('\nNenhum endpoint de voo capturado ainda.');
   }
 
+  console.log('\nRelatorio salvo: intercept-report.json');
   await browser.close();
-  console.log('\n📋 Próximo passo: revise o intercept-report.json e me envie os endpoints encontrados.');
 }
 
 intercept().catch(err => {
-  console.error('Erro:', err);
+  console.error('Erro:', err.message);
   process.exit(1);
 });
