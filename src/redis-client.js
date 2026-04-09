@@ -1,51 +1,34 @@
-var store = {};
+var s = {};
 
-function getEntry(key) {
-var entry = store[key];
-if (!entry) return null;
-if (entry.exp && Date.now() > entry.exp) {
-delete store[key];
-return null;
-}
-return entry;
+function getE(k) {
+  var e = s[k];
+  if (!e) return null;
+  if (e.exp && Date.now() > e.exp) { delete s[k]; return null; }
+  return e;
 }
 
 var redis = {
-get: async function(key) {
-var e = getEntry(key);
-return e ? e.val : null;
-},
-set: async function(key, value, opts) {
-var exp = null;
-if (opts && opts.EX) exp = Date.now() + opts.EX * 1000;
-store[key] = { val: value, exp: exp };
-return ‘OK’;
-},
-del: async function(key) {
-delete store[key];
-return 1;
-},
-lPush: async function(key, value) {
-if (!store[key]) store[key] = { val: [], exp: null };
-store[key].val.unshift(value);
-return store[key].val.length;
-},
-lTrim: async function(key, start, end) {
-if (!store[key]) return;
-store[key].val = store[key].val.slice(start, end + 1);
-},
-lRange: async function(key, start, end) {
-var e = getEntry(key);
-if (!e) return [];
-var arr = e.val;
-if (end === -1) return arr.slice(start);
-return arr.slice(start, end + 1);
-},
-expire: async function(key, seconds) {
-if (!store[key]) return;
-store[key].exp = Date.now() + seconds * 1000;
-},
-on: function() {}
+  get: async function(k) { var e = getE(k); return e ? e.v : null; },
+  set: async function(k, v, o) {
+    var exp = null;
+    if (o && o.EX) exp = Date.now() + o.EX * 1000;
+    s[k] = { v: v, exp: exp };
+    return "OK";
+  },
+  del: async function(k) { delete s[k]; return 1; },
+  lPush: async function(k, v) {
+    if (!s[k]) s[k] = { v: [], exp: null };
+    s[k].v.unshift(v);
+    return s[k].v.length;
+  },
+  lTrim: async function(k, a, b) { if (s[k]) s[k].v = s[k].v.slice(a, b + 1); },
+  lRange: async function(k, a, b) {
+    var e = getE(k);
+    if (!e) return [];
+    return b === -1 ? e.v.slice(a) : e.v.slice(a, b + 1);
+  },
+  expire: async function(k, sec) { if (s[k]) s[k].exp = Date.now() + sec * 1000; },
+  on: function() {}
 };
 
 module.exports = redis;
