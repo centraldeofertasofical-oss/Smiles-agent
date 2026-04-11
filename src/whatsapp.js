@@ -4,22 +4,14 @@ const axios = require('axios');
 const WA_GATEWAY = process.env.WHATSAPP_URL || 'https://wa-gateway-production-a39d.up.railway.app';
 const GROUP_ID   = process.env.WHATSAPP_GROUP_ID || '120363426317749766@g.us';
 
-// Imagem fixa do Smiles usada como banner nas mensagens
-const SMILES_BANNER = 'https://www.smiles.com.br/assets/images/logo-smiles.png';
+const SMILES_BANNER = 'https://veja.abril.com.br/wp-content/uploads/2016/09/turismo-mala-viagem-20160905-03.jpg?quality=70&strip=info&w=750&h=500&crop=1';
 
-/**
- * Envia alerta de milhas para o grupo WhatsApp.
- */
 async function sendAlert({ destination, flights, dealInfo }) {
   if (!flights || flights.length === 0) return;
-
   const caption = formatMessage({ destination, flights, dealInfo });
   return await sendToGroup(caption);
 }
 
-/**
- * Formata a mensagem de alerta.
- */
 function formatMessage({ destination, flights, dealInfo }) {
   const topFlights = flights.slice(0, 3);
   const isGood = dealInfo?.isGoodDeal;
@@ -34,7 +26,6 @@ function formatMessage({ destination, flights, dealInfo }) {
     const stops = f.stops === 0 ? 'Direto' : `${f.stops} escala(s)`;
     const date = formatDate(f.date);
     const taxStr = f.tax > 0 ? ` + R$ ${f.tax.toFixed(2)} taxas` : ' + taxas incluídas';
-
     return [
       `${rank} *${f.airline}* — ${f.cabin === 'ECONOMIC' ? 'Econômica' : f.cabin}`,
       `📅 ${date} | ${stops}`,
@@ -50,28 +41,13 @@ function formatMessage({ destination, flights, dealInfo }) {
     ? `\n📉 *${dealInfo.percentBelow}% abaixo da média* ${isGood ? '🔥' : ''}`
     : '';
 
-  return [
-    header,
-    '',
-    flightsText,
-    historyText,
-    dealText,
-    '',
-    `_Atualizado: ${formatDateTime(new Date())}_`,
-  ].filter(l => l !== null).join('\n');
+  return [header, '', flightsText, historyText, dealText, '', `_Atualizado: ${formatDateTime(new Date())}_`]
+    .filter(l => l !== null).join('\n');
 }
 
-/**
- * Envia a mensagem via gateway próprio (send-group-image com banner fixo).
- */
 async function sendToGroup(caption) {
   const url = `${WA_GATEWAY}/send-group-image`;
-
-  const payload = {
-    groupId: GROUP_ID,
-    imageUrl: SMILES_BANNER,
-    caption,
-  };
+  const payload = { groupId: GROUP_ID, imageUrl: SMILES_BANNER, caption };
 
   try {
     const response = await axios.post(url, payload, {
@@ -82,13 +58,13 @@ async function sendToGroup(caption) {
     return response.data;
   } catch (err) {
     console.error('[whatsapp] ❌ Erro ao enviar:', err.message);
+    if (err.response) {
+      console.error('[whatsapp] ❌ Gateway respondeu:', JSON.stringify(err.response.data));
+    }
     throw err;
   }
 }
 
-/**
- * Envia mensagem de teste.
- */
 async function sendTest() {
   const caption = [
     '🤖 *Smiles Agent — Teste de Conexão*',
@@ -98,20 +74,15 @@ async function sendTest() {
     '',
     `_${formatDateTime(new Date())}_`,
   ].join('\n');
-
   return await sendToGroup(caption);
 }
-
-// ── Helpers ──────────────────────────────────────────────
 
 function formatDate(dateStr) {
   if (!dateStr) return 'N/A';
   try {
     const d = new Date(dateStr.includes('T') ? dateStr : `${dateStr}T12:00:00`);
     return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-  } catch (_) {
-    return dateStr;
-  }
+  } catch (_) { return dateStr; }
 }
 
 function formatDateTime(date) {
