@@ -1,46 +1,30 @@
-/**
- * whatsapp.js
- * ─────────────────────────────────────────────────────────────
- * Envia alertas de milhas via WhatsApp.
- * Suporta Evolution API e Z-API.
- * ─────────────────────────────────────────────────────────────
- */
-
 require('dotenv').config();
 const axios = require('axios');
 
-const PROVIDER   = process.env.WHATSAPP_PROVIDER || 'evolution';
-const WA_URL     = process.env.WHATSAPP_URL;
-const WA_TOKEN   = process.env.WHATSAPP_TOKEN;
-const WA_INST    = process.env.WHATSAPP_INSTANCE;
-const GROUP_ID   = process.env.WHATSAPP_GROUP_ID;
+const WA_GATEWAY = process.env.WHATSAPP_URL || 'https://wa-gateway-production-a39d.up.railway.app';
+const GROUP_ID   = process.env.WHATSAPP_GROUP_ID || '120363426317749766@g.us';
+
+// Imagem fixa do Smiles usada como banner nas mensagens
+const SMILES_BANNER = 'https://www.smiles.com.br/assets/images/logo-smiles.png';
 
 /**
- * Envia alerta de milhas para o WhatsApp configurado.
- * @param {Object} params
- * @param {Object} params.destination  - objeto destino do destinations.js
- * @param {Array}  params.flights      - top voos encontrados
- * @param {Object} params.dealInfo     - resultado do isGoodDeal()
+ * Envia alerta de milhas para o grupo WhatsApp.
  */
 async function sendAlert({ destination, flights, dealInfo }) {
   if (!flights || flights.length === 0) return;
 
-  const message = formatMessage({ destination, flights, dealInfo });
-
-  if (PROVIDER === 'evolution') {
-    return await sendEvolution(message);
-  } else {
-    return await sendZAPI(message);
-  }
+  const caption = formatMessage({ destination, flights, dealInfo });
+  return await sendToGroup(caption);
 }
 
 /**
- * Formata a mensagem de alerta no padrão WhatsApp.
+ * Formata a mensagem de alerta.
  */
 function formatMessage({ destination, flights, dealInfo }) {
-  const topFlights = flights.slice(0, 3); // máximo 3 voos por alerta
+  const topFlights = flights.slice(0, 3);
   const isGood = dealInfo?.isGoodDeal;
   const emoji = isGood ? '🔥' : '✈️';
+
   const header = isGood
     ? `${emoji} *OFERTA DE MILHAS — ${destination.label}*`
     : `${emoji} *ATUALIZAÇÃO MILHAS — ${destination.label}*`;
@@ -48,12 +32,13 @@ function formatMessage({ destination, flights, dealInfo }) {
   const flightsText = topFlights.map((f, i) => {
     const rank = i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉';
     const stops = f.stops === 0 ? 'Direto' : `${f.stops} escala(s)`;
-    const dateFormatted = formatDate(f.date);
+    const date = formatDate(f.date);
+    const taxStr = f.tax > 0 ? ` + R$ ${f.tax.toFixed(2)} taxas` : ' + taxas incluídas';
 
     return [
-      `${rank} *${f.airlineName}* — ${f.cabinType === 'ECONOMY' ? 'Econômica' : f.cabinType}`,
-      `📅 ${dateFormatted} | ${stops}`,
-      `💎 *${f.miles.toLocaleString('pt-BR')} milhas* + R$ ${f.tax.toFixed(2)} taxas`,
+      `${rank} *${f.airline}* — ${f.cabin === 'ECONOMIC' ? 'Econômica' : f.cabin}`,
+      `📅 ${date} | ${stops}`,
+      `💎 *${f.miles.toLocaleString('pt-BR')} milhas*${taxStr}`,
     ].join('\n');
   }).join('\n\n');
 
@@ -61,11 +46,9 @@ function formatMessage({ destination, flights, dealInfo }) {
     ? `\n📊 Média histórica: ${dealInfo.avgMiles.toLocaleString('pt-BR')} milhas`
     : '';
 
-  const dealText = dealInfo?.percentBelow !== null && dealInfo?.percentBelow !== undefined
+  const dealText = dealInfo?.percentBelow != null && dealInfo.percentBelow > 0
     ? `\n📉 *${dealInfo.percentBelow}% abaixo da média* ${isGood ? '🔥' : ''}`
     : '';
-
-  const link = topFlights[0]?.directLink || '';
 
   return [
     header,
@@ -74,62 +57,40 @@ function formatMessage({ destination, flights, dealInfo }) {
     historyText,
     dealText,
     '',
-    `🔗 ${link}`,
-    '',
     `_Atualizado: ${formatDateTime(new Date())}_`,
   ].filter(l => l !== null).join('\n');
 }
 
 /**
- * Envia via Evolution API.
+ * Envia a mensagem via gateway próprio (send-group-image com banner fixo).
  */
-async function sendEvolution(message) {
-  const url = `${WA_URL}/message/sendText/${WA_INST}`;
+async function sendToGroup(caption) {
+  const url = `${WA_GATEWAY}/send-group-image`;
 
   const payload = {
-    number: GROUP_ID,
-    text: message,
-    delay: 1200,
+    groupId: GROUP_ID,
+    imageUrl: SMILES_BANNER,
+    caption,
   };
 
-  const response = await axios.post(url, payload, {
-    headers: {
-      'apikey': WA_TOKEN,
-      'Content-Type': 'application/json',
-    },
-    timeout: 15000,
-  });
-
-  console.log('[whatsapp] ✅ Mensagem enviada via Evolution API');
-  return response.data;
+  try {
+    const response = await axios.post(url, payload, {
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 15000,
+    });
+    console.log('[whatsapp] ✅ Mensagem enviada para o grupo');
+    return response.data;
+  } catch (err) {
+    console.error('[whatsapp] ❌ Erro ao enviar:', err.message);
+    throw err;
+  }
 }
 
 /**
- * Envia via Z-API.
- */
-async function sendZAPI(message) {
-  const [instanceId, token] = WA_TOKEN.split(':');
-  const url = `https://api.z-api.io/instances/${instanceId || WA_INST}/token/${token}/send-text`;
-
-  const payload = {
-    phone: GROUP_ID,
-    message,
-  };
-
-  const response = await axios.post(url, payload, {
-    headers: { 'Content-Type': 'application/json' },
-    timeout: 15000,
-  });
-
-  console.log('[whatsapp] ✅ Mensagem enviada via Z-API');
-  return response.data;
-}
-
-/**
- * Envia mensagem de teste (para validar configuração).
+ * Envia mensagem de teste.
  */
 async function sendTest() {
-  const message = [
+  const caption = [
     '🤖 *Smiles Agent — Teste de Conexão*',
     '',
     '✅ WhatsApp configurado com sucesso!',
@@ -138,10 +99,10 @@ async function sendTest() {
     `_${formatDateTime(new Date())}_`,
   ].join('\n');
 
-  return await (PROVIDER === 'evolution' ? sendEvolution(message) : sendZAPI(message));
+  return await sendToGroup(caption);
 }
 
-// ── Helpers de formatação ─────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────
 
 function formatDate(dateStr) {
   if (!dateStr) return 'N/A';
